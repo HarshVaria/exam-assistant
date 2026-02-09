@@ -8,3 +8,4 @@ numpy==2.1.0
 transformers==4.46.3
 pypdf
 langchain-text-splitters
+httpx==0.27.2
