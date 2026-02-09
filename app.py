@@ -127,35 +127,26 @@ def load_models():
     return embedding_model, reranker
 
 
-# ---- Pinecone setup ----
+# ---- Pinecone setup (single index, namespaces for separation) ----
 
 def initialize_pinecone(api_key, user_id):
     pc = Pinecone(api_key=api_key)
 
-    notes_index_name = f"exam-notes-{user_id}"
-    books_index_name = f"exam-books-{user_id}"
+    index_name = f"exam-assistant-{user_id}"
 
     existing_indexes = [idx.name for idx in pc.list_indexes()]
 
-    if notes_index_name not in existing_indexes:
+    if index_name not in existing_indexes:
         pc.create_index(
-            name=notes_index_name,
+            name=index_name,
             dimension=EMBED_DIM,
             metric="cosine",
             spec=ServerlessSpec(cloud="aws", region="us-east-1")
         )
         time.sleep(5)
 
-    if books_index_name not in existing_indexes:
-        pc.create_index(
-            name=books_index_name,
-            dimension=EMBED_DIM,
-            metric="cosine",
-            spec=ServerlessSpec(cloud="aws", region="us-east-1")
-        )
-        time.sleep(5)
-
-    return pc.Index(notes_index_name), pc.Index(books_index_name)
+    index = pc.Index(index_name)
+    return index
 
 
 # ---- PDF text extraction ----
@@ -268,7 +259,6 @@ def process_notes(pdf_files, index, embedding_model):
         status.empty()
         return False
 
-    # Priority distribution
     high_p = sum(1 for c in all_chunks if c["priority"] >= 1.5)
     med_p = sum(1 for c in all_chunks if 1.2 <= c["priority"] < 1.5)
     low_p = sum(1 for c in all_chunks if c["priority"] < 1.2)
@@ -297,7 +287,7 @@ def process_notes(pdf_files, index, embedding_model):
             ))
 
         try:
-            index.upsert(vectors=vectors)
+            index.upsert(vectors=vectors, namespace="notes")
         except Exception as e:
             st.error(f"Error upserting notes batch: {e}")
 
@@ -358,7 +348,7 @@ def process_books(pdf_files, index, embedding_model):
             ))
 
         try:
-            index.upsert(vectors=vectors)
+            index.upsert(vectors=vectors, namespace="books")
         except Exception as e:
             st.error(f"Error upserting books batch: {e}")
 
@@ -371,13 +361,14 @@ def process_books(pdf_files, index, embedding_model):
 
 # ---- Two stage retrieval ----
 
-def stage1_retrieve(question, notes_index, embedding_model, reranker, top_k=5, rerank_top_k=3):
+def stage1_retrieve(question, index, embedding_model, reranker, top_k=5, rerank_top_k=3):
     try:
         query_embedding = embedding_model.encode(question).tolist()
-        results = notes_index.query(
+        results = index.query(
             vector=query_embedding,
             top_k=top_k,
-            include_metadata=True
+            include_metadata=True,
+            namespace="notes"
         )
 
         matches = results.get("matches", [])
@@ -400,13 +391,14 @@ def stage1_retrieve(question, notes_index, embedding_model, reranker, top_k=5, r
         return []
 
 
-def stage2_retrieve(question, books_index, embedding_model, reranker, top_k=4):
+def stage2_retrieve(question, index, embedding_model, reranker, top_k=4):
     try:
         query_embedding = embedding_model.encode(question).tolist()
-        results = books_index.query(
+        results = index.query(
             vector=query_embedding,
             top_k=top_k,
-            include_metadata=True
+            include_metadata=True,
+            namespace="books"
         )
 
         matches = results.get("matches", [])
@@ -428,14 +420,14 @@ def stage2_retrieve(question, books_index, embedding_model, reranker, top_k=4):
         return []
 
 
-def intelligent_routing(question, notes_index, books_index, embedding_model, reranker,
+def intelligent_routing(question, index, embedding_model, reranker,
                         confidence_threshold=0.5, notes_available=True, books_available=True):
 
     stage1_matches = []
     stage2_matches = []
 
     if notes_available:
-        stage1_matches = stage1_retrieve(question, notes_index, embedding_model, reranker, top_k=5, rerank_top_k=3)
+        stage1_matches = stage1_retrieve(question, index, embedding_model, reranker, top_k=5, rerank_top_k=3)
 
     if stage1_matches and stage1_matches[0]["confidence"] > confidence_threshold:
         return {
@@ -446,7 +438,7 @@ def intelligent_routing(question, notes_index, books_index, embedding_model, rer
         }
     else:
         if books_available:
-            stage2_matches = stage2_retrieve(question, books_index, embedding_model, reranker, top_k=4)
+            stage2_matches = stage2_retrieve(question, index, embedding_model, reranker, top_k=4)
 
         if stage2_matches:
             return {
@@ -554,9 +546,7 @@ if not st.session_state.initialized:
     with st.spinner("Loading models..."):
         try:
             st.session_state.embedding_model, st.session_state.reranker = load_models()
-            st.session_state.notes_index, st.session_state.books_index = initialize_pinecone(
-                pinecone_key, st.session_state.user_id
-            )
+            st.session_state.index = initialize_pinecone(pinecone_key, st.session_state.user_id)
             st.session_state.groq_client = Groq(api_key=groq_key)
             st.session_state.initialized = True
         except Exception as e:
@@ -585,7 +575,7 @@ with col1:
         with st.spinner("Processing notes..."):
             success = process_notes(
                 notes_files,
-                st.session_state.notes_index,
+                st.session_state.index,
                 st.session_state.embedding_model
             )
             if success:
@@ -608,7 +598,7 @@ with col2:
         with st.spinner("Processing books..."):
             success = process_books(
                 books_files,
-                st.session_state.books_index,
+                st.session_state.index,
                 st.session_state.embedding_model
             )
             if success:
@@ -665,8 +655,7 @@ else:
 
                 result = intelligent_routing(
                     question=prompt,
-                    notes_index=st.session_state.notes_index,
-                    books_index=st.session_state.books_index,
+                    index=st.session_state.index,
                     embedding_model=st.session_state.embedding_model,
                     reranker=st.session_state.reranker,
                     confidence_threshold=confidence_threshold,
