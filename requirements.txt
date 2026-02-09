@@ -6,3 +6,7 @@ pinecone-client==5.0.1
 groq==0.11.0
 numpy==2.1.0
 transformers==4.46.3
+pypdf
+langchain
+langchain-text-splitters
+numpy
