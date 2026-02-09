@@ -9,7 +9,7 @@ from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from pinecone import Pinecone, ServerlessSpec
 from groq import Groq
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 
 st.set_page_config(
