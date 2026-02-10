@@ -114,7 +114,7 @@ with st.sidebar:
     st.markdown("""
     Built by **Harsh Varia**
 
-    [GitHub](https://github.com/HarshVaria) | [LinkedIn](https://linkedin.com/in/HarshVaria)
+    [GitHub](https://github.com/HarshVaria) | [LinkedIn](https://www.linkedin.com/in/harsh-varia-7422a22b0/)
     """)
 
 
